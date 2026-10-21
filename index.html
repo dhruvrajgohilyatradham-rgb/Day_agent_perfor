@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/png" href="./customer-support.png">
 <title>The Agent Ledger — Night Sales Performance</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -45,6 +46,7 @@ tfoot td,tr.tot td{font-weight:700;border-top:var(--rule);background:rgba(27,24,
 .up{color:var(--green);font-weight:700}.dn{color:var(--red);font-weight:700}
 .note{font-size:14px;color:var(--mute);font-style:italic}
 .msg{border:3px double var(--red);padding:14px;margin:14px 0;text-align:center}
+th.s{cursor:pointer;user-select:none}th.s:hover{background:#dccb9b}.ic{opacity:.35}
 @media print{nav,.ctl,.box{display:none}section{display:none}section.on{display:block}}
 </style>
 </head>
@@ -54,7 +56,7 @@ tfoot td,tr.tot td{font-weight:700;border-top:var(--rule);background:rgba(27,24,
   <div class="tiny">Night Sales Edition • Agent Performance Records</div>
   <h1>THE AGENT LEDGER</h1>
   <p class="sub">Multi-Agent Performance, Compared &amp; Counted</p>
-  <div class="tiny"><span id="info">Loading…</span> &nbsp; <button id="refresh" class="alt mini">↻ Refresh</button></div>
+  <div class="tiny"><label>Shift <select id="shift"><option value="both">Both shifts (combined)</option><option value="morning_shift">Morning shift</option><option value="Night%20sales">Night sales</option></select></label> &nbsp; <span id="info">Loading…</span> &nbsp; <button id="refresh" class="alt mini">↻ Refresh</button></div>
 </header>
 <div id="msg" class="msg" hidden></div>
 <main id="app" hidden>
@@ -89,13 +91,15 @@ tfoot td,tr.tot td{font-weight:700;border-top:var(--rule);background:rgba(27,24,
 </main>
 </div>
 <script>
-const URL_='https://opensheet.elk.sh/1r4lcKV-nEqFJAalyr2qOVsKb9l628VGnooLoc0GSN0c/morning_shift';
-const COLS=[
+const SHEET='https://opensheet.elk.sh/1r4lcKV-nEqFJAalyr2qOVsKb9l628VGnooLoc0GSN0c/';
+const COLS_ALL=[
  {n:'Booking',k:'booking',t:'n'},{n:'Amount',k:'amount',t:'m'},{n:'Amount / Booking',k:'apb',t:'m',d:1},
  {n:'Total Calls',k:'total calls',t:'n'},{n:'Incoming Ans',k:'incoming ans',t:'n'},{n:'Click To Call',k:'click to call',t:'n'},
- {n:'Click Ans',k:'click ans',t:'n'},{n:'Leads',k:'leads',t:'n'},{n:'Pending',k:'pending',t:'n'},{n:'Chat',k:'chat',t:'n'},
+ {n:'Click Ans',k:'click ans',a:'click to call ans',t:'n'},{n:'Leads',k:'leads',t:'n'},{n:'Pending',k:'pending',t:'n'},{n:'Chat',k:'chat',t:'n'},
  {n:'Ticket',k:'ticket',t:'n'},{n:'ABD',k:'abd',t:'n'},{n:'Working Hours',k:'working hours',t:'t'},{n:'Call Hours',k:'call hours',t:'t'},{n:'Target',k:'target',t:'m'}];
+let COLS=COLS_ALL;
 const DEF=['booking','amount','total calls'];
+const cleanName=s=>String(s||'').trim().replace(/\s+/g,' ').toLowerCase().replace(/\b\w/g,m=>m.toUpperCase());
 let ROWS=[],AG=[],MS=[];
 const $=id=>document.getElementById(id);
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -146,18 +150,31 @@ function tools(id,box,fn){$(id).innerHTML=`<button class="alt mini" data-all="1"
  $(id).onclick=e=>{const b=e.target.dataset.all;if(b==null)return;$(box).querySelectorAll('input').forEach(i=>i.checked=b==='1');fn()}}
 const inMonth=m=>ROWS.filter(r=>r.date.startsWith(m));
 
+/* SORTING: click a heading -> numbers high-to-low first, click again low-to-high. Text columns A-Z first. */
+const SORT={t1:{i:null,dir:1},t2:{i:null,dir:1},t3:{i:null,dir:1}};
+const cmpN=(x,y,d)=>{const a=isFinite(x),b=isFinite(y);if(!a&&!b)return 0;if(!a)return 1;if(!b)return -1;return(x-y)*d};
+function sortList(list,st,val){if(st.i===null)return list;
+ return list.slice().sort((p,q)=>st.i===0?(p.key<q.key?-1:p.key>q.key?1:0)*st.dir:cmpN(val(p,st.i),val(q,st.i),st.dir))}
+const ic=(st,i)=>st.i===i?(st.dir<0?' ▼':' ▲'):' <span class="ic">⇅</span>';
+const th=(st,i,l)=>`<th class="s" data-i="${i}" data-l="${esc(l)}" title="Click to sort">${esc(l)}${ic(st,i)}</th>`;
+function clickSort(box,st,fn){$(box).addEventListener('click',e=>{const h=e.target.closest('th.s');if(!h)return;const i=+h.dataset.i;
+ if(st.i===i)st.dir*=-1;else{st.i=i;st.dir=i===0?1:-1}fn()})}
+const shiftLabel=()=>$('shift').selectedOptions[0].text;
+const fileTag=()=>shiftLabel().replace(/[^A-Za-z]+/g,'-').replace(/-$/,'');
+
 /* TAB 1 */
-function r1(){
+const C=k=>COLS_ALL.find(c=>c.k===k);
+function t1Model(){
  const m=$('m1').value,a=$('a1').value,all=a==='*',rs=inMonth(m).filter(r=>all||r.agent===a);
- const cs=[COLS[0],COLS[1],COLS[3]];
- $('s1').innerHTML=[['Bookings',fmt(COLS[0],tot(rs,COLS[0]))],['Amount',fmt(COLS[1],tot(rs,COLS[1]))],['Total Calls',fmt(COLS[3],tot(rs,COLS[3]))],['Recorded days',nd(rs)],['Avg bookings / day',fmt(COLS[0],avg(rs,COLS[0]),1)],['Avg amount / day',fmt(COLS[1],avg(rs,COLS[1]))]].map(x=>`<div class="stat"><div class="l">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');
+ let list=all?[...new Set(rs.map(r=>r.agent))].sort().map(g=>{const x=rs.filter(r=>r.agent===g);return{l:g,h:`<b>${esc(g)}</b> <span class="note">${nd(x)}d</span>`,key:g.toLowerCase(),rs:x}})
+  :rs.slice().sort((x,y)=>x.date<y.date?-1:1).map(r=>({l:fD(r.date)+' '+dow(r.date),h:`${fD(r.date)} <span class="note">${dow(r.date)}</span>`,key:r.date,rs:[r]}));
+ list=sortList(list,SORT.t1,(x,i)=>tot(x.rs,COLS[i-1]));
+ return{m,a,all,rs,list,first:all?'Agent':'Date',name:'Agent-Ledger_'+fM(m).replace(' ','-')+'_'+(all?'All-Agents':a.replace(/\s+/g,'-'))+'_'+fileTag()}}
+function r1(){
+ const M=t1Model(),rs=M.rs,st=SORT.t1;
+ $('s1').innerHTML=[['Bookings',fmt(C('booking'),tot(rs,C('booking')))],['Amount',fmt(C('amount'),tot(rs,C('amount')))],['Total Calls',fmt(C('total calls'),tot(rs,C('total calls')))],['Recorded days',nd(rs)],['Avg bookings / day',fmt(C('booking'),avg(rs,C('booking')),1)],['Avg amount / day',fmt(C('amount'),avg(rs,C('amount')))]].map(x=>`<div class="stat"><div class="l">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');
  if(!rs.length){$('o1').innerHTML='<div class="msg">No records for this selection.</div>';return}
- const head=COLS.map(c=>`<th>${c.n}</th>`).join('');
- let rows,first;
- if(all){first='Agent';const ags=[...new Set(rs.map(r=>r.agent))].sort();
-  rows=ags.map(g=>{const x=rs.filter(r=>r.agent===g);return`<tr><td><b>${esc(g)}</b> <span class="note">${nd(x)}d</span></td>${COLS.map(c=>`<td>${fmt(c,tot(x,c))}</td>`).join('')}</tr>`}).join('')}
- else{first='Date';rows=rs.slice().sort((x,y)=>x.date<y.date?-1:1).map(r=>`<tr><td>${fD(r.date)} <span class="note">${dow(r.date)}</span></td>${COLS.map(c=>`<td>${fmt(c,tot([r],c))}</td>`).join('')}</tr>`).join('')}
- $('o1').innerHTML=`<table><thead><tr><th>${first}</th>${head}</tr></thead><tbody>${rows}</tbody><tfoot>
+ $('o1').innerHTML=`<table><thead><tr>${th(st,0,M.first)}${COLS.map((c,j)=>th(st,j+1,c.n)).join('')}</tr></thead><tbody>${M.list.map(x=>`<tr><td>${x.h}</td>${COLS.map(c=>`<td>${fmt(c,tot(x.rs,c))}</td>`).join('')}</tr>`).join('')}</tbody><tfoot>
  <tr><td>Total</td>${COLS.map(c=>`<td>${fmt(c,tot(rs,c))}</td>`).join('')}</tr>
  <tr><td>Avg / day</td>${COLS.map(c=>`<td>${fmt(c,avg(rs,c),1)}</td>`).join('')}</tr></tfoot></table>`}
 
@@ -167,7 +184,7 @@ function init2(){const m=$('m2').value,ds=[...new Set(inMonth(m).map(r=>r.date))
  const k=Math.min(ds.length-1,Math.max(0,ds.length-2));
  $('rs').value=ds[0];$('re').value=ds[Math.max(0,k-1)];$('sd').value=ds[k];r2()}
 function r2(){
- const s=$('rs').value,e=$('re').value,d=$('sd').value,ags=picked('ag2'),cs=colsOf('c2'),o=$('o2');
+ const s=$('rs').value,e=$('re').value,d=$('sd').value,ags=picked('ag2'),cs=colsOf('c2'),o=$('o2'),st=SORT.t2;
  if(!s||!e||!d){o.innerHTML='<div class="msg">Choose a range and a single day.</div>';return}
  if(s>e){o.innerHTML='<div class="msg">Range start must be on or before range end.</div>';return}
  if(!ags.length||!cs.length){o.innerHTML='<div class="msg">Tick at least one agent and one column.</div>';return}
@@ -175,38 +192,51 @@ function r2(){
  const cal=Math.round((new Date(e)-new Date(s))/864e5)+1;
  $('i2').innerHTML=`<b>Range:</b> ${fD(s)} – ${fD(e)} · ${cal} days selected, ${nd(rg)} with records &nbsp; <b>Single day:</b> ${fD(d)} (${dow(d)})${d>=s&&d<=e?' <span class="dn">— inside the range</span>':''}`;
  o.innerHTML=cs.map(c=>{
-  const row=(lab,R,D,b)=>{const t=tot(R,c),a=avg(R,c),v=D.length?tot(D,c):NaN;
-   return`<tr${b?' class="tot"':''}><td>${lab}</td><td>${fmt(c,t)}</td><td>${fmt(c,a,1)}</td><td>${fmt(c,v)}</td><td>${dl(c,v-a,1)}</td><td>${pc(pct(a,v))}</td></tr>`};
-  const rows=ags.filter(g=>rg.some(r=>r.agent===g)||dy.some(r=>r.agent===g)).sort().map(g=>row(esc(g),rg.filter(r=>r.agent===g),dy.filter(r=>r.agent===g))).join('');
-  return`<h3>${c.n}</h3><div class="scroll"><table><thead><tr><th>Agent</th><th>Range total</th><th>Avg / day (range)</th><th>Single day</th><th>Day − Avg</th><th>Day vs Avg %</th></tr></thead><tbody>${rows}${row('All selected',rg,dy,1)}</tbody></table></div>`}).join('')}
+  const calc=(lab,key,R,D)=>{const t=tot(R,c),a=avg(R,c),v=D.length?tot(D,c):NaN,p=pct(a,v);
+   return{lab,key,t,a,v,p,vals:[t,a,v,v-a,typeof p==='number'?p:NaN]}};
+  const row=(x,b)=>`<tr${b?' class="tot"':''}><td>${x.lab}</td><td>${fmt(c,x.t)}</td><td>${fmt(c,x.a,1)}</td><td>${fmt(c,x.v)}</td><td>${dl(c,x.v-x.a,1)}</td><td>${pc(x.p)}</td></tr>`;
+  let list=ags.filter(g=>rg.some(r=>r.agent===g)||dy.some(r=>r.agent===g)).sort().map(g=>calc(esc(g),g.toLowerCase(),rg.filter(r=>r.agent===g),dy.filter(r=>r.agent===g)));
+  list=sortList(list,st,(x,i)=>x.vals[i-1]);
+  const L=['Agent','Range total','Avg / day (range)','Single day','Day − Avg','Day vs Avg %'];
+  return`<h3>${c.n}</h3><div class="scroll"><table><thead><tr>${L.map((l,i)=>th(st,i,l)).join('')}</tr></thead><tbody>${list.map(x=>row(x)).join('')}${row(calc('All selected','',rg,dy),1)}</tbody></table></div>`}).join('')}
 
 /* TAB 3 */
 function r3(){
- const A=$('ma').value,B=$('mb').value,ags=picked('ag3'),cs=colsOf('c3'),o=$('o3');
+ const A=$('ma').value,B=$('mb').value,ags=picked('ag3'),cs=colsOf('c3'),o=$('o3'),st=SORT.t3;
  if(A===B){o.innerHTML='<div class="msg">Choose two different months.</div>';return}
  if(!ags.length||!cs.length){o.innerHTML='<div class="msg">Tick at least one agent and one column.</div>';return}
  const ra=inMonth(A).filter(r=>ags.includes(r.agent)),rb=inMonth(B).filter(r=>ags.includes(r.agent));
  o.innerHTML=`<p><b>A:</b> ${fM(A)} (${nd(ra)} recorded days) &nbsp; <b>B:</b> ${fM(B)} (${nd(rb)} recorded days). Change = (B − A) ÷ A.</p>`+cs.map(c=>{
-  const row=(lab,x,y,b)=>{const ta=tot(x,c),tb=tot(y,c),aa=avg(x,c),ab=avg(y,c);
-   return`<tr${b?' class="tot"':''}><td>${lab}</td><td>${fmt(c,ta)}</td><td>${fmt(c,tb)}</td><td>${dl(c,tb-ta)}</td><td>${pc(pct(ta,tb))}</td><td>${fmt(c,aa,1)}</td><td>${fmt(c,ab,1)}</td><td>${pc(pct(aa,ab))}</td></tr>`};
-  const rows=ags.filter(g=>ra.some(r=>r.agent===g)||rb.some(r=>r.agent===g)).sort().map(g=>row(esc(g),ra.filter(r=>r.agent===g),rb.filter(r=>r.agent===g))).join('');
-  return`<h3>${c.n}</h3><div class="scroll"><table><thead><tr><th>Agent</th><th>${fM(A)} total</th><th>${fM(B)} total</th><th>Difference</th><th>Change %</th><th>${fM(A)} avg/day</th><th>${fM(B)} avg/day</th><th>Avg change %</th></tr></thead><tbody>${rows}${row('All selected',ra,rb,1)}</tbody></table></div>`}).join('')}
+  const calc=(lab,key,x,y)=>{const ta=tot(x,c),tb=tot(y,c),aa=avg(x,c),ab=avg(y,c),p1=pct(ta,tb),p2=pct(aa,ab);
+   return{lab,key,ta,tb,aa,ab,p1,p2,vals:[ta,tb,tb-ta,typeof p1==='number'?p1:NaN,aa,ab,typeof p2==='number'?p2:NaN]}};
+  const row=(r,b)=>`<tr${b?' class="tot"':''}><td>${r.lab}</td><td>${fmt(c,r.ta)}</td><td>${fmt(c,r.tb)}</td><td>${dl(c,r.tb-r.ta)}</td><td>${pc(r.p1)}</td><td>${fmt(c,r.aa,1)}</td><td>${fmt(c,r.ab,1)}</td><td>${pc(r.p2)}</td></tr>`;
+  let list=ags.filter(g=>ra.some(r=>r.agent===g)||rb.some(r=>r.agent===g)).sort().map(g=>calc(esc(g),g.toLowerCase(),ra.filter(r=>r.agent===g),rb.filter(r=>r.agent===g)));
+  list=sortList(list,st,(x,i)=>x.vals[i-1]);
+  const L=['Agent',fM(A)+' total',fM(B)+' total','Difference','Change %',fM(A)+' avg/day',fM(B)+' avg/day','Avg change %'];
+  return`<h3>${c.n}</h3><div class="scroll"><table><thead><tr>${L.map((l,i)=>th(st,i,l)).join('')}</tr></thead><tbody>${list.map(x=>row(x)).join('')}${row(calc('All selected','',ra,rb),1)}</tbody></table></div>`}).join('')}
 
+clickSort('o1',SORT.t1,r1);clickSort('o2',SORT.t2,r2);clickSort('o3',SORT.t3,r3);
 /* load + wire */
+function parseSheet(j){const out=[];
+ j.forEach(r=>{const o={};let cd=null;
+  for(const k in r){const v=r[k];o[k.trim().toLowerCase().replace(/\s+/g,' ')]=v;if(!cd){const c=dateCands(v);if(c.length)cd=c}}
+  const a=cleanName(o['agent name']||o['name']);if(!cd||!a)return;
+  const x={date:null,cd,agent:a};COLS_ALL.forEach(c=>{if(!c.d){const v=o[c.k]!==undefined?o[c.k]:o[c.a];x[c.k]=c.t==='t'?pt(v):pn(v)}});
+  if(!COLS_ALL.some(c=>!c.d&&x[c.k]!=null))return; /* skip planned rows with no figures yet */
+  out.push(x)});
+ resolveDates(out);return out}
+
 function msg(t,w){$('msg').hidden=!t;$('msg').innerHTML=t||''}
 async function load(){
  const btn=$('refresh');btn.disabled=true;if(!ROWS.length)msg('Fetching the latest records…');
  try{
-  const r=await fetch(URL_,{cache:'no-store'});if(!r.ok)throw new Error('Server answered '+r.status);
-  const j=await r.json();if(!Array.isArray(j))throw new Error('Unexpected response');
-  const out=[];
-  j.forEach(r=>{const o={};let cd=null;
-   for(const k in r){const v=r[k];o[k.trim().toLowerCase()]=v;if(!cd){const c=dateCands(v);if(c.length)cd=c}}
-   const a=String(o['agent name']||'').trim();if(!cd||!a)return;
-   const x={date:null,cd,agent:a};COLS.forEach(c=>{if(!c.d)x[c.k]=c.t==='t'?pt(o[c.k]):pn(o[c.k])});out.push(x)});
-  resolveDates(out);
-  if(!out.length)throw new Error('No valid rows (need a dd-mm-yyyy date and Agent Name)');
-  ROWS=out;AG=[...new Set(ROWS.map(r=>r.agent))].sort();MS=[...new Set(ROWS.map(r=>r.date.slice(0,7)))].sort().reverse();
+  const v=$('shift').value,names=v==='both'?['morning_shift','Night%20sales']:[v],out=[];
+  for(const nm of names){
+   const r=await fetch(SHEET+nm,{cache:'no-store'});if(!r.ok)throw new Error(decodeURIComponent(nm)+': server answered '+r.status);
+   const j=await r.json();if(!Array.isArray(j))throw new Error('Unexpected response from '+decodeURIComponent(nm));
+   out.push(...parseSheet(j))}
+  if(!out.length)throw new Error('No valid rows (need a Date, an Agent Name / Name column, and at least some numbers in a row)');
+  ROWS=out;COLS=COLS_ALL.filter(c=>c.d||out.some(r=>r[c.k]!=null));AG=[...new Set(ROWS.map(r=>r.agent))].sort();MS=[...new Set(ROWS.map(r=>r.date.slice(0,7)))].sort().reverse();
   const mo=MS.map(k=>`<option value="${k}">${fM(k)}</option>`).join('');
   const keep=id=>{const v=$(id).value;return v};const p=['m1','m2','ma','mb'].map(keep);
   ['m1','m2','ma','mb'].forEach((id,i)=>{$(id).innerHTML=mo;$(id).value=MS.includes(p[i])?p[i]:(id==='mb'?MS[0]:id==='ma'?(MS[1]||MS[0]):MS[0])});
@@ -222,7 +252,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.query
 ['m1','a1'].forEach(i=>$(i).onchange=r1);$('m2').onchange=init2;
 ['rs','re','sd','ag2','c2'].forEach(i=>$(i).oninput=r2);
 ['ma','mb','ag3','c3'].forEach(i=>$(i).oninput=r3);
-$('refresh').onclick=load;load();
+$('refresh').onclick=load;$('shift').onchange=()=>{ROWS=[];$('app').hidden=true;load()};load();
 </script>
 </body>
 </html>
